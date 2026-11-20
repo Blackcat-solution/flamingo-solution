@@ -1,0 +1,62 @@
+# FLAMINGO API for a demonstration deployment.
+#
+# This stack satisfies the production guards in server/src/config.js:
+# a secret file instead of process-environment secrets, a real clamd sidecar,
+# secure cookies and an explicit demo-mode acknowledgement. It is still a
+# DEMONSTRATION deployment: demo accounts stay on disk and no real payment,
+# identity or escrow integration is attached. Never put real user data in it.
+#
+# Before first start:
+#   1. mkdir -p secrets
+#   2. Write secrets/flamingo.json with
+#      {"DOCUMENT_ENCRYPTION_KEY":"<at least 32 random characters>"}
+#   3. docker compose up -d --build
+#   4. docker compose exec api npm run seed
+#
+# See docs/DEPLOY_VERCEL.md for the full runbook.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+
+      # Labelled demonstration: seeded demo accounts are allowed to stay.
+      DEMO_MODE: "true"
+      ALLOW_DEMO_IN_PRODUCTION: "true"
+
+      # Production guards: managed secret file, real scanner, secure cookies.
+      SECRET_PROVIDER: file
+      FLAMINGO_SECRETS_FILE: /run/secrets/flamingo.json
+      KMS_PROVIDER: local
+      MALWARE_SCAN_MODE: clamd
+      CLAMAV_HOST: clamav
+      CLAMAV_PORT: "3310"
+      SECURE_COOKIES: "true"
+
+      # Demo only. Set to "true" and enrol every administrator before real use.
+      REQUIRE_ADMIN_MFA: "false"
+
+      FLAMINGO_DATA_DIR: /app/server/data
+      FLAMINGO_DB: /app/server/data/flamingo.db
+      FLAMINGO_STORAGE: /app/server/storage
+    volumes:
+      - flamingo-data:/app/server/data
+      - flamingo-storage:/app/server/storage
+      - ./secrets/flamingo.json:/run/secrets/flamingo.json:ro
+    depends_on:
+      - clamav
+
+  clamav:
+    image: clamav/clamav:stable
+    restart: unless-stopped
+
+volumes:
+  flamingo-data:
+  flamingo-storage:

@@ -1,0 +1,11 @@
+# Keep shell scripts LF even on Windows checkouts: deploy/docker-entrypoint.sh
+# is executed by /bin/sh inside the container and a CRLF shebang breaks it.
+* text=auto
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

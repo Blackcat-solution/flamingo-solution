@@ -1,0 +1,26 @@
+node_modules/
+.git/
+.env
+.env.*
+!.env.example
+secrets/
+server/data/
+server/storage/
+server/backups/
+server/src/
+server/test/
+e2e/
+test-results/
+playwright-report/
+.e2e/
+*.log
+
+# The API is deployed separately. Keeping these out of the upload stops Vercel
+# from detecting a container service and expecting `services` configuration.
+deploy/
+docker-compose.yml
+.dockerignore
+railway.json
+docs/
+scripts/
+playwright.config.ts
