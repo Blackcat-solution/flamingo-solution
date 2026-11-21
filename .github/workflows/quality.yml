@@ -12,6 +12,7 @@ permissions:
 jobs:
   quality:
     name: Regression checks
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,9 +27,25 @@ jobs:
         env:
           CI: true
       - run: npm run build
+  monitor-window:
+    name: Check 30-day monitoring window
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      active: ${{ steps.date.outputs.active }}
+    steps:
+      - id: date
+        shell: bash
+        run: |
+          if [[ "$(date -u +%F)" < "2026-12-22" ]]; then
+            echo "active=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "active=false" >> "$GITHUB_OUTPUT"
+          fi
   daily-monitor:
     name: Daily production checks
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: monitor-window
+    if: needs.monitor-window.outputs.active == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
