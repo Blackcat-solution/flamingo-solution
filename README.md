@@ -139,7 +139,8 @@ FLAMINGO/
 ├── scripts/
 │   ├── smoke.mjs           HTTP role and permission smoke test
 │   ├── backup.mjs          Online SQLite + storage backup
-│   └── restore.mjs         Restore with key fingerprint check
+│   ├── restore.mjs         Restore with key fingerprint check
+│   └── demo/               Supervisor and autostart for the free public demo
 └── docs/                   Research, architecture, security, testing, deployment ...
 ```
 

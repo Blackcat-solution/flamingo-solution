@@ -41,6 +41,9 @@ CSRF token work unchanged. No client code changes are needed.
 | `Dockerfile` | API image: Node 24, built client included, runs as a non-root user |
 | `docker-compose.yml` | API + `clamd` sidecar + persistent volumes for a demo deployment |
 | `.dockerignore` | Keeps local data, secrets and test artefacts out of the image |
+| `scripts/demo/supervisor.mjs` | Keeps the API, tunnel and `vercel.json` rewrite alive on the demonstration PC |
+| `scripts/demo/install-autostart.ps1` | Registers the supervisor at sign-in, hidden, via Scheduled Task |
+| `scripts/demo/remove-autostart.ps1` | Removes the autostart and stops the supervisor |
 
 ---
 
@@ -205,7 +208,7 @@ Re-run the local suites before deploying: `npm test`, `npx playwright test`,
 
 ## 7. Free demonstration deployment (current setup)
 
-This is the state of the live deployment as of 17 November 2026, and the cheapest way to show
+This is the state of the live deployment as of 24 November 2026, and the cheapest way to show
 the product before paying for infrastructure.
 
 | Piece | What runs it | Cost |
@@ -229,7 +232,70 @@ the Vercel origin, cookies and CSRF behave exactly as they do locally.
 - Vercel's Hobby plan is for non-commercial use. Before this becomes the live site for
   Flamingo Solution Pvt. Ltd., move to Pro (about $20/month) or a paid host.
 
-**To relaunch after a restart**
+### 7.1 Run it without daily babysitting
+
+`scripts/demo/supervisor.mjs` owns the two local processes and the rewrite:
+
+1. starts `node server/src/index.js` with `DEMO_MODE=true` and
+   `RATE_LIMIT_MULTIPLIER=25`;
+2. starts `cloudflared tunnel --url http://127.0.0.1:4000 --no-autoupdate`;
+3. reads the `https://<random>.trycloudflare.com` hostname from the tunnel output,
+   rewrites the `/api/:path*` destination in `vercel.json`, and runs
+   `vercel --prod --yes`;
+4. restarts either process when it exits, with backoff from 2 seconds to 60 seconds;
+5. polls `http://127.0.0.1:4000/api/health` and the tunnel URL every 30 seconds,
+   restarting a process that is alive but no longer serving;
+6. refuses to start twice: `%LOCALAPPDATA%\flamingo-demo\supervisor.lock` holds the
+   live PID, and a stale lock is detected and replaced.
+
+Logs: `%LOCALAPPDATA%\flamingo-demo\logs\supervisor-YYYY-MM-DD.log`, one line per
+child-process line, prefixed `API`, `TUNNEL`, `DEPLOY` or `HEALTH`.
+
+Install it once, for the current Windows user:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\demo\install-autostart.ps1 -StartNow
+```
+
+That writes a hidden launcher to `%LOCALAPPDATA%\flamingo-demo\start-supervisor.vbs`
+and registers the Scheduled Task **FLAMINGO Demo Supervisor** at sign-in (20-second
+delay, no console window) when run from an elevated shell. Without elevation it does
+not fail: it installs the same hidden launcher in the user's Startup folder, which
+needs no administrator rights. This machine currently uses the Startup folder route.
+
+`scripts/demo/README.md` documents every behaviour, environment override and failure
+drill.
+
+Check it is running:
+
+```powershell
+Get-Content $env:LOCALAPPDATA\flamingo-demo\supervisor.lock
+Invoke-WebRequest https://flamingo-gules.vercel.app/api/health -UseBasicParsing
+Get-ChildItem $env:LOCALAPPDATA\flamingo-demo\logs\*.log |
+  Sort-Object LastWriteTime | Select-Object -Last 1 | Get-Content -Tail 20
+```
+
+Remove it with `scripts\demo\remove-autostart.ps1`.
+
+### 7.2 What the supervisor cannot fix
+
+- **Sleep, hibernate, sign-out, shutdown and power cuts stop it.** The task runs only
+  while this user is signed in. On a laptop, disable sleep on AC power before relying on
+  it: `powercfg /change standby-timeout-ac 0`. That is a machine-wide setting with a power
+  cost, so it is not applied automatically.
+- **A tunnel restart is still a short outage.** A quick tunnel gets a new hostname every
+  restart, so the public site returns 502 from the moment the old tunnel dies until the new
+  `vercel --prod` is READY — roughly one to two minutes.
+- **One machine is a single point of failure.** A failed disk, a Windows update that boots
+  into recovery, or a home-internet outage takes the demonstration down regardless of the
+  supervisor.
+- **The tunnel host is public.** Rate limits are scaled (`RATE_LIMIT_MULTIPLIER=25`) because
+  every visitor appears to come from a Vercel edge address; per-account lockout is
+  unchanged. See §7.4.
+- **Windows ends a session's processes at sign-out**, so the task must start again at the
+  next sign-in.
+
+### 7.3 Manual relaunch (if autostart is disabled)
 
 ```powershell
 # 1. API. The multiplier keeps a shared link usable when every visitor shares
@@ -245,16 +311,40 @@ cloudflared tunnel --url http://localhost:4000
 npx vercel --prod --yes
 ```
 
-**Why the multiplier is needed.** The API sees the Vercel edge address, not the visitor, so
-per-IP limits act as per-audience limits. Measured through the public URL: 25 failed sign-ins
-from distinct addresses all returned `401`, and a valid sign-in still returned `200`. With the
-multiplier removed, the 21st attempt from the whole audience returns `429` and sign-in is closed
-to everyone for 15 minutes. Per-account protection is unchanged: eight failed attempts on one
-account still block that account for 15 minutes (`server/src/routes/auth.js:301`).
+### 7.4 Why the multiplier is needed
 
-**When responses justify the spend**, do §3 (Railway or any Docker host) instead: a stable API
-hostname, real ClamAV, and no dependency on a desktop. Attach your own domain in Vercel under
-Settings → Domains.
+The API sees the Vercel edge address, not the visitor, so per-IP limits act as per-audience
+limits. Measured through the public URL: 25 failed sign-ins from distinct addresses all
+returned `401`, and a valid sign-in still returned `200`. With the multiplier removed, the
+21st attempt from the whole audience returns `429` and sign-in is closed to everyone for 15
+minutes. Per-account protection is unchanged: eight failed attempts on one account still
+block that account for 15 minutes (`server/src/routes/auth.js:301`).
+
+### 7.5 When responses justify the spend
+
+The supervisor keeps a free demonstration alive; it cannot make it dependable. Once the link
+is being shown to people who matter, move the API to a host that does not depend on this PC:
+
+| Option | Rough cost | What it buys |
+| --- | --- | --- |
+| Railway Hobby | about $5/month | Docker build from this repo, volume for SQLite and uploads, stable hostname |
+| Render Starter + persistent disk | about $7/month | Same, without a trial that expires |
+| Any small VPS + `docker compose` | $5–10/month | Full control, ClamAV sidecar, nginx/Caddy for TLS |
+
+Render's free instance is not a substitute: it sleeps after inactivity and has no persistent
+disk, so the SQLite database and uploads are lost on restart. Railway's free trial has
+already expired on this account.
+
+After the API is on a stable host:
+
+1. Set the `vercel.json` destination to that host once (see §4.1) and deploy.
+2. Run `scripts\demo\remove-autostart.ps1` and stop the local API and tunnel.
+3. Delete `scripts/demo/` from the deployment path, or leave it, unused.
+4. Follow §3.3 for the production environment variables; do not carry `DEMO_MODE=true`
+   into a deployment that handles real data.
+
+Attach your own domain in Vercel under Settings → Domains. Vercel Hobby is non-commercial,
+so a public business site also needs Pro (about $20/month).
 
 ## 8. Simpler alternative
 
